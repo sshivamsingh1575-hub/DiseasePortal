@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Disease Portal</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Disease Portal – India States</h1>
+    <input type="text" id="search" placeholder="Search State..." onkeyup="filterStates()">
+    <table id="statesTable">
+        <tr>
+            <th>State</th>
+            <th>Max Temp</th>
+            <th>Min Temp</th>
+            <th>Precipitation</th>
+            <th>Dengue</th>
+            <th>Malaria</th>
+            <th>Chikungunya</th>
+            <th>Deaths</th>
+        </tr>
+        {% for s in states %}
+        <tr>
+            <td>{{ s['name'] }}</td>
+            <td>{{ s['max_temp'] }}</td>
+            <td>{{ s['min_temp'] }}</td>
+            <td>{{ s['precipitation'] }}</td>
+            <td>{{ s['dengue_cases'] }}</td>
+            <td>{{ s['malaria_cases'] }}</td>
+            <td>{{ s['chikungunya_cases'] }}</td>
+            <td>{{ s['deaths'] }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <a href="/map">View Map</a>
+
+<script>
+function filterStates() {
+  var input, filter, table, tr, td, i, txtValue;
+  input = document.getElementById("search");
+  filter = input.value.toUpperCase();
+  table = document.getElementById("statesTable");
+  tr = table.getElementsByTagName("tr");
+  for (i = 1; i < tr.length; i++) {
+    td = tr[i].getElementsByTagName("td")[0];
+    if (td) {
+      txtValue = td.textContent || td.innerText;
+      if (txtValue.toUpperCase().indexOf(filter) > -1) {
+        tr[i].style.display = "";
+      } else {
+        tr[i].style.display = "none";
+      }
+    }       
+  }
+}
+</script>
+</body>
+</html>
+<div>
+    <h2>Ask Our Health Bot</h2>
+    <textarea id="botInput" rows="3" cols="50"></textarea><br>
+    <button onclick="alert('Bot coming soon')">Ask</button>
+</div>
