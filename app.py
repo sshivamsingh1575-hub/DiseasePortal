@@ -1,104 +1,87 @@
-import os
-import random
-import requests
-import folium
 from flask import Flask, render_template, request, jsonify
+import requests
+import random
 from openai import OpenAI
+import os
 
 app = Flask(__name__)
+
+# --- OpenAI API client ---
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-def get_weather(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
-    r = requests.get(url, timeout=10)
-    data = r.json()
-    current = data.get('current_weather', {})
-    return {
-        "temperature": current.get("temperature"),
-        "windspeed": current.get("windspeed"),
-        "weathercode": current.get("weathercode")
-    }
-
-def get_health_data(lat, lon):
-    dengue = random.randint(0, 1500)
-    malaria = random.randint(0, 1500)
-    chik = random.randint(0, 1500)
-    total = dengue + malaria + chik
-    if total > 2000:
-        risk = "red"
-    elif total > 1000:
-        risk = "yellow"
-    elif total < 200:
-        risk = "green"
-    else:
-        risk = "purple"
-    return {
-        "dengue": dengue,
-        "malaria": malaria,
-        "chikungunya": chik,
-        "risk": risk
-    }
-
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/data', methods=['POST'])
+@app.route("/data", methods=["POST"])
 def data():
-    lat = float(request.json.get('lat'))
-    lon = float(request.json.get('lon'))
+    user_data = request.get_json()
+    lat = user_data.get("lat")
+    lon = user_data.get("lon")
 
-    w = get_weather(lat, lon)
-    h = get_health_data(lat, lon)
+    # WEATHER: Open-Meteo API
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+    weather = requests.get(weather_url).json().get("current_weather", {})
 
-    # Build folium map centered on location with satellite tiles
-    m = folium.Map(location=[lat, lon], zoom_start=11, tiles=None)
-    folium.TileLayer(
-        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri",
-        name="Esri Satellite",
-        overlay=False,
-        control=True
-    ).add_to(m)
+    temp = weather.get("temperature", 30)
+    wind = weather.get("windspeed", 5)
 
-    # Add risk marker
-    folium.CircleMarker(
-        location=[lat, lon],
-        radius=25,
-        color=h['risk'],
-        fill=True,
-        fill_color=h['risk'],
-        popup=f"<b>Risk Level: {h['risk']}</b><br>Dengue:{h['dengue']}<br>Malaria:{h['malaria']}<br>Chik:{h['chikungunya']}"
-    ).add_to(m)
+    # MOCK NASA/DISEASE Data:
+    dengue = random.randint(0, 200)
+    malaria = random.randint(0, 200)
+    chikungunya = random.randint(0, 200)
 
-    m.save('templates/map_temp.html')
+    risk_level = "green"
+    if dengue + malaria + chikungunya > 400:
+        risk_level = "red"
+    elif dengue + malaria + chikungunya > 200:
+        risk_level = "yellow"
+    else:
+        risk_level = "green"
 
-    return jsonify({"weather": w, "health": h})
+    precautions = {
+        "red": [
+            "Avoid stagnant water areas",
+            "Wear full-sleeve clothing",
+            "Use mosquito repellents",
+            "Stay indoors during peak heat"
+        ],
+        "yellow": [
+            "Clean water storage regularly",
+            "Use bed nets at night",
+            "Stay hydrated"
+        ],
+        "green": [
+            "Conditions safe but stay alert",
+            "Maintain hygiene",
+            "Regular health check-ups"
+        ]
+    }
 
-@app.route('/map')
-def map_view():
-    return render_template('map_temp.html')
+    return jsonify({
+        "weather": {
+            "temperature": temp,
+            "windspeed": wind
+        },
+        "health": {
+            "dengue": dengue,
+            "malaria": malaria,
+            "chikungunya": chikungunya,
+            "risk": risk_level,
+            "precautions": precautions[risk_level]
+        }
+    })
 
-@app.route('/chat', methods=['POST'])
+@app.route("/chat", methods=["POST"])
 def chat():
-    user_input = request.json.get('message', '')
-    prompt = f"You are a health & weather advisor. User asked: {user_input}. Give clear advice."
+    user_message = request.get_json().get("message", "")
+    completion = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role":"system","content":"You are a helpful health & weather assistant."},
+                  {"role":"user","content":user_message}]
+    )
+    reply = completion.choices[0].message.content
+    return jsonify({"reply": reply})
 
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful AI assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=300
-        )
-        answer = completion.choices[0].message.content
-    except Exception as e:
-        answer = f"Error: {e}"
-
-    return jsonify({"reply": answer})
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)
-
