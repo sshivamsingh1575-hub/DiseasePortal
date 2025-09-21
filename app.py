@@ -1,88 +1,102 @@
 import os
 import requests
-from flask import Flask, render_template, request, jsonify
 import folium
+from flask import Flask, render_template, request, jsonify
+from openai import OpenAI
 
 app = Flask(__name__)
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-# Simulated disease + crop advice (replace with real DB later)
+# --- Weather + Health data from APIs ---
+def get_weather(lat, lon):
+    # Open-Meteo API (free)
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,wind_speed_10m&current_weather=true"
+    r = requests.get(url)
+    data = r.json()
+    current = data.get('current_weather', {})
+    return {
+        "temperature": current.get("temperature"),
+        "windspeed": current.get("windspeed"),
+        "precipitation": current.get("precipitation", 0)
+    }
+
 def get_health_data(lat, lon):
-    # For demo: decide by latitude
-    if lat > 20:
-        return dict(dengue=150, malaria=200, chikungunya=50, heatwave=10, crop_season="Rabi (wheat, mustard)")
+    # Simulated risk zones for now
+    import random
+    dengue = random.randint(0, 1500)
+    malaria = random.randint(0, 1500)
+    chikungunya = random.randint(0, 1500)
+    total = dengue + malaria + chikungunya
+    if total > 2000:
+        risk = "red"
+    elif total > 1000:
+        risk = "yellow"
+    elif total < 200:
+        risk = "green"
     else:
-        return dict(dengue=300, malaria=600, chikungunya=100, heatwave=50, crop_season="Kharif (rice, maize)")
+        risk = "purple"
+    return {
+        "dengue": dengue,
+        "malaria": malaria,
+        "chikungunya": chikungunya,
+        "risk": risk
+    }
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/weather')
-def weather():
-    lat = request.args.get('lat')
-    lon = request.args.get('lon')
+@app.route('/data', methods=['POST'])
+def data():
+    user_lat = request.json.get('lat')
+    user_lon = request.json.get('lon')
 
-    # --- Open-Meteo API for real weather ---
-    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,wind_speed_10m&forecast_days=1"
-    r = requests.get(weather_url)
-    w = r.json()
+    w = get_weather(user_lat, user_lon)
+    h = get_health_data(user_lat, user_lon)
 
-    temp_values = w['hourly']['temperature_2m']
-    precip_values = w['hourly']['precipitation']
-    wind_values = w['hourly']['wind_speed_10m']
-
-    temp_max = max(temp_values)
-    temp_min = min(temp_values)
-    precipitation = sum(precip_values)
-    wind_speed = max(wind_values)
-
-    # Simple forecast
-    forecast = "Rainy" if precipitation > 5 else "Clear"
-
-    # Health + crop info
-    health = get_health_data(float(lat), float(lon))
+    # Generate a map
+    m = folium.Map(location=[user_lat, user_lon], zoom_start=8)
+    folium.CircleMarker(
+        location=[user_lat, user_lon],
+        radius=15,
+        color=h['risk'],
+        fill=True,
+        fill_color=h['risk'],
+        popup=f"Dengue:{h['dengue']} Malaria:{h['malaria']} Chikungunya:{h['chikungunya']}"
+    ).add_to(m)
+    m.save('templates/map_temp.html')
 
     return jsonify({
-        "location": f"{lat},{lon}",
-        "temp_max": round(temp_max, 1),
-        "temp_min": round(temp_min, 1),
-        "precipitation": round(precipitation, 1),
-        "wind_speed": round(wind_speed, 1),
-        "forecast": forecast,
-        "crop_season": health['crop_season'],
-        "dengue": health['dengue'],
-        "malaria": health['malaria'],
-        "chikungunya": health['chikungunya'],
-        "heatwave": health['heatwave']
+        "weather": w,
+        "health": h
     })
 
 @app.route('/map')
 def map_view():
-    lat = float(request.args.get('lat'))
-    lon = float(request.args.get('lon'))
-
-    health = get_health_data(lat, lon)
-
-    # Determine color risk
-    total_cases = health['dengue'] + health['malaria'] + health['chikungunya']
-    color = 'green'
-    if total_cases > 500:
-        color = 'red'
-    elif total_cases > 200:
-        color = 'orange'
-
-    m = folium.Map(location=[lat, lon], zoom_start=6)
-    folium.CircleMarker(location=[lat, lon],
-                        radius=15,
-                        color=color,
-                        fill=True,
-                        fill_color=color,
-                        popup=(f"Dengue:{health['dengue']} Malaria:{health['malaria']} "
-                               f"Chikungunya:{health['chikungunya']}")).add_to(m)
-
-    map_path = 'templates/map_temp.html'
-    m.save(map_path)
     return render_template('map_temp.html')
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    user_input = request.json.get('message', '')
+    prompt = f"""
+You are Health & Weather Advisor Bot.
+The user asked: {user_input}.
+Provide helpful, accurate information.
+If you know location or conditions, include relevant health and safety advice.
+    """
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful AI assistant for health, weather, and safety."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=400
+        )
+        answer = completion.choices[0].message.content
+    except Exception as e:
+        answer = f"Error: {e}"
+    return jsonify({"reply": answer})
 
 if __name__ == '__main__':
     app.run(debug=True)

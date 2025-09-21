@@ -1,54 +1,62 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Global Health & Weather Portal</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <script>
-    // Ask for geolocation on load
-    window.onload = function () {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(success, error);
-      } else {
-        alert("Geolocation is not supported by this browser.");
-      }
-    };
-
-    function success(position) {
-      const lat = position.coords.latitude;
-      const lon = position.coords.longitude;
-      document.getElementById('coords').innerText = `Lat: ${lat}, Lon: ${lon}`;
-      fetchWeather(lat, lon);
-    }
-
-    function error() {
-      alert("Unable to retrieve your location.");
-    }
-
-    async function fetchWeather(lat, lon) {
-      document.getElementById('weather').innerText = "Loading...";
-      const res = await fetch(`/weather?lat=${lat}&lon=${lon}`);
-      const data = await res.json();
-      // display
-      document.getElementById('weather').innerHTML = `
-        <h2>Conditions for ${data.location}</h2>
-        <p><b>Temperature:</b> ${data.temp_min}°C - ${data.temp_max}°C</p>
-        <p><b>Wind Speed:</b> ${data.wind_speed} m/s</p>
-        <p><b>Precipitation:</b> ${data.precipitation} mm</p>
-        <p><b>Forecast:</b> ${data.forecast}</p>
-        <p><b>Recommended Crop Season:</b> ${data.crop_season}</p>
-        <p><b>Dengue Cases:</b> ${data.dengue}</p>
-        <p><b>Malaria Cases:</b> ${data.malaria}</p>
-        <p><b>Chikungunya Cases:</b> ${data.chikungunya}</p>
-        <p><b>Heatwave Cases:</b> ${data.heatwave}</p>
-      `;
-      document.getElementById('mapFrame').src = `/map?lat=${lat}&lon=${lon}`;
-    }
-  </script>
+    <title>Disease & Weather Portal</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <h1>Global Health & Weather Portal</h1>
-  <p id="coords">Detecting your location...</p>
-  <div id="weather"></div>
-  <iframe id="mapFrame" width="100%" height="500px" frameborder="0"></iframe>
-</body>
-</html>
+<h1>Disease & Weather Portal</h1>
+
+<!-- Auto or Manual Location -->
+<p><b>Allow browser to detect your location or enter manually:</b></p>
+<button onclick="getLocation()">Use My Location</button>
+<input type="text" id="manualLocation" placeholder="Enter city or place">
+<button onclick="manualLocation()">Use Manual Location</button>
+
+<div id="info" style="margin-top:20px;background:#f0f0f0;padding:10px;"></div>
+
+<a href="/map" target="_blank">View Map of Risk Zones</a>
+
+<hr>
+<h2>Ask Our AI Bot</h2>
+<textarea id="botInput" rows="3" cols="60" placeholder="Ask anything about health, weather, or safety..."></textarea><br>
+<button onclick="sendToBot()">Ask</button>
+<p><strong>Bot says:</strong></p>
+<div id="botReply" style="white-space: pre-wrap; background:#f0f0f0; padding:10px;"></div>
+
+<script>
+// --- Automatic Location ---
+function getLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function(position){
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      sendData(lat, lon);
+    });
+  } else {
+    document.getElementById('info').innerText = "Geolocation is not supported by this browser.";
+  }
+}
+
+// --- Manual Location using OpenCage or Nominatim ---
+async function manualLocation() {
+  const place = document.getElementById('manualLocation').value;
+  if (!place) return alert('Enter a place');
+  const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(place)}`);
+  const data = await res.json();
+  if (data.length > 0) {
+    const lat = data[0].lat;
+    const lon = data[0].lon;
+    sendData(lat, lon);
+  } else {
+    alert('Location not found');
+  }
+}
+
+// --- Send lat/lon to server ---
+async function sendData(lat, lon) {
+  document.getElementById('info').innerText = "Loading data...";
+  const response = await fetch('/data', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({lat: lat, lo
