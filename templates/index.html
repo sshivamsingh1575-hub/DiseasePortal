@@ -6,7 +6,11 @@
 </head>
 <body>
     <h1>Disease Portal – India States</h1>
+
+    <!-- Search bar -->
     <input type="text" id="search" placeholder="Search State..." onkeyup="filterStates()">
+
+    <!-- States table -->
     <table id="statesTable">
         <tr>
             <th>State</th>
@@ -31,32 +35,54 @@
         </tr>
         {% endfor %}
     </table>
+
     <a href="/map">View Map</a>
 
-<script>
-function filterStates() {
-  var input, filter, table, tr, td, i, txtValue;
-  input = document.getElementById("search");
-  filter = input.value.toUpperCase();
-  table = document.getElementById("statesTable");
-  tr = table.getElementsByTagName("tr");
-  for (i = 1; i < tr.length; i++) {
-    td = tr[i].getElementsByTagName("td")[0];
-    if (td) {
-      txtValue = td.textContent || td.innerText;
-      if (txtValue.toUpperCase().indexOf(filter) > -1) {
-        tr[i].style.display = "";
-      } else {
-        tr[i].style.display = "none";
+    <!-- Filter function -->
+    <script>
+    function filterStates() {
+      var input, filter, table, tr, td, i, txtValue;
+      input = document.getElementById("search");
+      filter = input.value.toUpperCase();
+      table = document.getElementById("statesTable");
+      tr = table.getElementsByTagName("tr");
+      for (i = 1; i < tr.length; i++) {
+        td = tr[i].getElementsByTagName("td")[0];
+        if (td) {
+          txtValue = td.textContent || td.innerText;
+          if (txtValue.toUpperCase().indexOf(filter) > -1) {
+            tr[i].style.display = "";
+          } else {
+            tr[i].style.display = "none";
+          }
+        }       
       }
-    }       
-  }
-}
-</script>
+    }
+    </script>
+
+    <hr>
+
+    <!-- AI Bot Section -->
+    <h2>Ask Our Health Bot</h2>
+    <textarea id="botInput" rows="3" cols="60" placeholder="Ask about disease risk, prevention, or health advice..."></textarea><br>
+    <button onclick="sendToBot()">Ask</button>
+
+    <p><strong>Bot says:</strong></p>
+    <div id="botReply" style="white-space: pre-wrap; background:#f0f0f0; padding:10px;"></div>
+
+    <!-- Bot fetch script -->
+    <script>
+    async function sendToBot() {
+      const userMessage = document.getElementById('botInput').value;
+      document.getElementById('botReply').innerText = "Thinking...";
+      const response = await fetch('/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: userMessage})
+      });
+      const data = await response.json();
+      document.getElementById('botReply').innerText = data.reply;
+    }
+    </script>
 </body>
 </html>
-<div>
-    <h2>Ask Our Health Bot</h2>
-    <textarea id="botInput" rows="3" cols="50"></textarea><br>
-    <button onclick="alert('Bot coming soon')">Ask</button>
-</div>
