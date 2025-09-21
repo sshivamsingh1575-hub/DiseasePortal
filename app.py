@@ -1,13 +1,16 @@
 from flask import Flask, render_template, request, jsonify
-import requests
-import random
+import requests, sqlite3, os
 from openai import OpenAI
-import os
+from datetime import date
 
 app = Flask(__name__)
-
-# --- OpenAI API client ---
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# ---- DB Connection (India health data) ----
+def get_db_connection():
+    conn = sqlite3.connect('data/database.db')  # same DB you used for India states
+    conn.row_factory = sqlite3.Row
+    return conn
 
 @app.route("/")
 def index():
@@ -19,56 +22,50 @@ def data():
     lat = user_data.get("lat")
     lon = user_data.get("lon")
 
-    # WEATHER: Open-Meteo API
-    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
-    weather = requests.get(weather_url).json().get("current_weather", {})
+    # ---- NASA POWER WEATHER ----
+    today = date.today().strftime("%Y%m%d")
+    url = f"https://power.larc.nasa.gov/api/temporal/daily/point?parameters=T2M_MAX,T2M_MIN,PRECTOTCORR&start={today}&end={today}&latitude={lat}&longitude={lon}&community=ag"
+    nasa = requests.get(url).json()
+    try:
+        # latest day data
+        data_day = list(nasa['properties']['parameter']['T2M_MAX'].keys())[0]
+        max_temp = nasa['properties']['parameter']['T2M_MAX'][data_day]
+        min_temp = nasa['properties']['parameter']['T2M_MIN'][data_day]
+        precip = nasa['properties']['parameter']['PRECTOTCORR'][data_day]
+    except:
+        max_temp, min_temp, precip = 30, 20, 2
 
-    temp = weather.get("temperature", 30)
-    wind = weather.get("windspeed", 5)
+    # ---- Get India disease data from DB ----
+    # If you know the nearest state, map lat/lon to state here.
+    # For demo we just pick Maharashtra row:
+    conn = get_db_connection()
+    state = conn.execute("SELECT * FROM states WHERE name='Maharashtra'").fetchone()
+    conn.close()
 
-    # MOCK NASA/DISEASE Data:
-    dengue = random.randint(0, 200)
-    malaria = random.randint(0, 200)
-    chikungunya = random.randint(0, 200)
+    dengue = state['dengue_cases']
+    malaria = state['malaria_cases']
+    chikungunya = state['chikungunya_cases']
 
-    risk_level = "green"
-    if dengue + malaria + chikungunya > 400:
+    total_cases = dengue + malaria + chikungunya
+    if total_cases > 1500:
         risk_level = "red"
-    elif dengue + malaria + chikungunya > 200:
+    elif total_cases > 500:
         risk_level = "yellow"
     else:
         risk_level = "green"
 
-    precautions = {
-        "red": [
-            "Avoid stagnant water areas",
-            "Wear full-sleeve clothing",
-            "Use mosquito repellents",
-            "Stay indoors during peak heat"
-        ],
-        "yellow": [
-            "Clean water storage regularly",
-            "Use bed nets at night",
-            "Stay hydrated"
-        ],
-        "green": [
-            "Conditions safe but stay alert",
-            "Maintain hygiene",
-            "Regular health check-ups"
-        ]
-    }
-
     return jsonify({
         "weather": {
-            "temperature": temp,
-            "windspeed": wind
+            "max_temp": max_temp,
+            "min_temp": min_temp,
+            "precipitation": precip
         },
         "health": {
+            "state": state['name'],
             "dengue": dengue,
             "malaria": malaria,
             "chikungunya": chikungunya,
-            "risk": risk_level,
-            "precautions": precautions[risk_level]
+            "risk": risk_level
         }
     })
 
@@ -77,8 +74,11 @@ def chat():
     user_message = request.get_json().get("message", "")
     completion = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role":"system","content":"You are a helpful health & weather assistant."},
-                  {"role":"user","content":user_message}]
+        messages=[
+            {"role": "system", "content": "You are a helpful health & weather advisor using NASA climate data and India disease DB."},
+            {"role": "user", "content": user_message}
+        ],
+        max_tokens=350
     )
     reply = completion.choices[0].message.content
     return jsonify({"reply": reply})
