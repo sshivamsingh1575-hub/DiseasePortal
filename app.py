@@ -1,4 +1,5 @@
 import os
+import random
 import requests
 import folium
 from flask import Flask, render_template, request, jsonify
@@ -7,26 +8,22 @@ from openai import OpenAI
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-# --- Weather + Health data from APIs ---
 def get_weather(lat, lon):
-    # Open-Meteo API (free)
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,wind_speed_10m&current_weather=true"
-    r = requests.get(url)
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+    r = requests.get(url, timeout=10)
     data = r.json()
     current = data.get('current_weather', {})
     return {
         "temperature": current.get("temperature"),
         "windspeed": current.get("windspeed"),
-        "precipitation": current.get("precipitation", 0)
+        "weathercode": current.get("weathercode")
     }
 
 def get_health_data(lat, lon):
-    # Simulated risk zones for now
-    import random
     dengue = random.randint(0, 1500)
     malaria = random.randint(0, 1500)
-    chikungunya = random.randint(0, 1500)
-    total = dengue + malaria + chikungunya
+    chik = random.randint(0, 1500)
+    total = dengue + malaria + chik
     if total > 2000:
         risk = "red"
     elif total > 1000:
@@ -38,7 +35,7 @@ def get_health_data(lat, lon):
     return {
         "dengue": dengue,
         "malaria": malaria,
-        "chikungunya": chikungunya,
+        "chikungunya": chik,
         "risk": risk
     }
 
@@ -48,28 +45,35 @@ def index():
 
 @app.route('/data', methods=['POST'])
 def data():
-    user_lat = request.json.get('lat')
-    user_lon = request.json.get('lon')
+    lat = float(request.json.get('lat'))
+    lon = float(request.json.get('lon'))
 
-    w = get_weather(user_lat, user_lon)
-    h = get_health_data(user_lat, user_lon)
+    w = get_weather(lat, lon)
+    h = get_health_data(lat, lon)
 
-    # Generate a map
-    m = folium.Map(location=[user_lat, user_lon], zoom_start=8)
+    # Build folium map centered on location with satellite tiles
+    m = folium.Map(location=[lat, lon], zoom_start=11, tiles=None)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri",
+        name="Esri Satellite",
+        overlay=False,
+        control=True
+    ).add_to(m)
+
+    # Add risk marker
     folium.CircleMarker(
-        location=[user_lat, user_lon],
-        radius=15,
+        location=[lat, lon],
+        radius=25,
         color=h['risk'],
         fill=True,
         fill_color=h['risk'],
-        popup=f"Dengue:{h['dengue']} Malaria:{h['malaria']} Chikungunya:{h['chikungunya']}"
+        popup=f"<b>Risk Level: {h['risk']}</b><br>Dengue:{h['dengue']}<br>Malaria:{h['malaria']}<br>Chik:{h['chikungunya']}"
     ).add_to(m)
+
     m.save('templates/map_temp.html')
 
-    return jsonify({
-        "weather": w,
-        "health": h
-    })
+    return jsonify({"weather": w, "health": h})
 
 @app.route('/map')
 def map_view():
@@ -78,25 +82,23 @@ def map_view():
 @app.route('/chat', methods=['POST'])
 def chat():
     user_input = request.json.get('message', '')
-    prompt = f"""
-You are Health & Weather Advisor Bot.
-The user asked: {user_input}.
-Provide helpful, accurate information.
-If you know location or conditions, include relevant health and safety advice.
-    """
+    prompt = f"You are a health & weather advisor. User asked: {user_input}. Give clear advice."
+
     try:
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful AI assistant for health, weather, and safety."},
+                {"role": "system", "content": "You are a helpful AI assistant."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=400
+            max_tokens=300
         )
         answer = completion.choices[0].message.content
     except Exception as e:
         answer = f"Error: {e}"
+
     return jsonify({"reply": answer})
 
 if __name__ == '__main__':
     app.run(debug=True)
+
