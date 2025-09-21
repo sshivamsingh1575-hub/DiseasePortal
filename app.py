@@ -1,106 +1,88 @@
 import os
-from openai import OpenAI
+import requests
 from flask import Flask, render_template, request, jsonify
-import sqlite3
-import pandas as pd
 import folium
 
 app = Flask(__name__)
 
-# ---- OpenAI client ----
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# Simulated disease + crop advice (replace with real DB later)
+def get_health_data(lat, lon):
+    # For demo: decide by latitude
+    if lat > 20:
+        return dict(dengue=150, malaria=200, chikungunya=50, heatwave=10, crop_season="Rabi (wheat, mustard)")
+    else:
+        return dict(dengue=300, malaria=600, chikungunya=100, heatwave=50, crop_season="Kharif (rice, maize)")
 
-# ---- DB Connection ----
-def get_db_connection():
-    conn = sqlite3.connect('data/database.db')
-    conn.row_factory = sqlite3.Row
-    return conn
-
-# ---- Index route ----
 @app.route('/')
 def index():
-    conn = get_db_connection()
-    states = conn.execute('SELECT * FROM states').fetchall()
-    conn.close()
-    return render_template('index.html', states=states)
+    return render_template('index.html')
 
-# ---- Map route ----
+@app.route('/weather')
+def weather():
+    lat = request.args.get('lat')
+    lon = request.args.get('lon')
+
+    # --- Open-Meteo API for real weather ---
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,wind_speed_10m&forecast_days=1"
+    r = requests.get(weather_url)
+    w = r.json()
+
+    temp_values = w['hourly']['temperature_2m']
+    precip_values = w['hourly']['precipitation']
+    wind_values = w['hourly']['wind_speed_10m']
+
+    temp_max = max(temp_values)
+    temp_min = min(temp_values)
+    precipitation = sum(precip_values)
+    wind_speed = max(wind_values)
+
+    # Simple forecast
+    forecast = "Rainy" if precipitation > 5 else "Clear"
+
+    # Health + crop info
+    health = get_health_data(float(lat), float(lon))
+
+    return jsonify({
+        "location": f"{lat},{lon}",
+        "temp_max": round(temp_max, 1),
+        "temp_min": round(temp_min, 1),
+        "precipitation": round(precipitation, 1),
+        "wind_speed": round(wind_speed, 1),
+        "forecast": forecast,
+        "crop_season": health['crop_season'],
+        "dengue": health['dengue'],
+        "malaria": health['malaria'],
+        "chikungunya": health['chikungunya'],
+        "heatwave": health['heatwave']
+    })
+
 @app.route('/map')
 def map_view():
-    conn = get_db_connection()
-    states = conn.execute('SELECT * FROM states').fetchall()
-    conn.close()
+    lat = float(request.args.get('lat'))
+    lon = float(request.args.get('lon'))
 
-    m = folium.Map(location=[22.9734, 78.6569], zoom_start=5)
-    for s in states:
-        risk = 'green'
-        if s['dengue_cases'] + s['malaria_cases'] + s['chikungunya_cases'] > 1500:
-            risk = 'red'
-        elif s['dengue_cases'] > 500:
-            risk = 'orange'
+    health = get_health_data(lat, lon)
 
-        popup = f"{s['name']}<br>Dengue: {s['dengue_cases']}<br>Malaria: {s['malaria_cases']}"
-        folium.CircleMarker(location=[s['latitude'], s['longitude']],
-                            radius=10,
-                            color=risk,
-                            fill=True,
-                            fill_color=risk,
-                            popup=popup).add_to(m)
+    # Determine color risk
+    total_cases = health['dengue'] + health['malaria'] + health['chikungunya']
+    color = 'green'
+    if total_cases > 500:
+        color = 'red'
+    elif total_cases > 200:
+        color = 'orange'
 
-    m.save('templates/map.html')
-    return render_template('map.html')
+    m = folium.Map(location=[lat, lon], zoom_start=6)
+    folium.CircleMarker(location=[lat, lon],
+                        radius=15,
+                        color=color,
+                        fill=True,
+                        fill_color=color,
+                        popup=(f"Dengue:{health['dengue']} Malaria:{health['malaria']} "
+                               f"Chikungunya:{health['chikungunya']}")).add_to(m)
 
-# ---- API route ----
-@app.route('/api/states')
-def api_states():
-    conn = get_db_connection()
-    states = conn.execute('SELECT * FROM states').fetchall()
-    conn.close()
-    return jsonify([dict(s) for s in states])
+    map_path = 'templates/map_temp.html'
+    m.save(map_path)
+    return render_template('map_temp.html')
 
-# ---- CHAT route ----
-@app.route('/chat', methods=['POST'])
-def chat():
-    user_input = request.json.get('message', '')
-
-    # Build state data for context
-    conn = get_db_connection()
-    states = conn.execute('SELECT * FROM states').fetchall()
-    conn.close()
-
-    states_text = ""
-    for s in states:
-        states_text += (f"{s['name']} - MaxTemp:{s['max_temp']} MinTemp:{s['min_temp']} "
-                        f"Precipitation:{s['precipitation']} Dengue:{s['dengue_cases']} "
-                        f"Malaria:{s['malaria_cases']} Chikungunya:{s['chikungunya_cases']} Deaths:{s['deaths']}\n")
-
-    prompt = f"""
-You are HealthBot for India's Disease Portal.
-You have this data:
-{states_text}
-
-Answer the user’s question below, giving helpful and preventive advice.
-If asked about a state, use the data above.
-If asked for general health advice, respond appropriately:
-
-Question: {user_input}
-"""
-
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful public health advisor."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=400
-        )
-        answer = completion.choices[0].message.content
-    except Exception as e:
-        answer = f"Error: {e}"
-
-    return jsonify({"reply": answer})
-
-# ---- Run app ----
 if __name__ == '__main__':
     app.run(debug=True)
