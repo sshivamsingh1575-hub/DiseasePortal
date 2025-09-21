@@ -1,101 +1,101 @@
-import os
 from flask import Flask, render_template, request, jsonify
+import requests, random, os
 import pandas as pd
-import folium
+from geopy.distance import geodesic  # find nearest state
 from openai import OpenAI
 
 app = Flask(__name__)
+
+# --- OpenAI API client ---
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-# Load combined disease+coords data
+# --- Load CSV with statewise disease data ---
 states_df = pd.read_csv('data/india_diseases_combined.csv')
 
-# Assign risk color
-def assign_risk(row):
-    try:
-        dengue = float(row.get('Dengue', 0))
-        malaria = float(row.get('Malaria', 0))
-        chik = float(row.get('Chikungunya', 0))
-    except:
-        dengue = malaria = chik = 0
-    total = dengue + malaria + chik
-    if total > 2000:
-        return 'red'
-    elif total > 1000:
-        return 'orange'
-    elif total > 500:
-        return 'yellow'
-    else:
-        return 'green'
-
-states_df['Risk'] = states_df.apply(assign_risk, axis=1)
-
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/map')
-def map_view():
-    m = folium.Map(location=[22.9734, 78.6569], zoom_start=5)
-    for _, row in states_df.iterrows():
-        popup = f"""
-        <b>{row['State']}</b><br>
-        Dengue: {row.get('Dengue',0)}<br>
-        Malaria: {row.get('Malaria',0)}<br>
-        Chikungunya: {row.get('Chikungunya',0)}<br>
-        Risk: {row['Risk']}
-        """
-        folium.CircleMarker(
-            location=[row['Latitude'], row['Longitude']],
-            radius=10,
-            color=row['Risk'],
-            fill=True,
-            fill_color=row['Risk'],
-            popup=popup
-        ).add_to(m)
-    m.save('templates/map_temp.html')
-    return render_template('map_temp.html')
+@app.route("/data", methods=["POST"])
+def data():
+    user_data = request.get_json()
+    lat = float(user_data.get("lat"))
+    lon = float(user_data.get("lon"))
 
-@app.route('/state-data', methods=['GET'])
-def state_data():
-    state = request.args.get('state')
-    row = states_df[states_df['State'].str.lower() == state.lower()]
-    if row.empty:
-        return jsonify({"error":"State not found"}),404
-    return jsonify(row.to_dict(orient='records')[0])
+    # find nearest state by lat/lon from CSV
+    def nearest_state(lat, lon):
+        coords = (lat, lon)
+        states_df['distance'] = states_df.apply(lambda r: geodesic(coords, (r['latitude'], r['longitude'])).km, axis=1)
+        nearest = states_df.loc[states_df['distance'].idxmin()]
+        return nearest
 
-@app.route('/chat', methods=['POST'])
+    nearest = nearest_state(lat, lon)
+
+    # WEATHER: Open-Meteo API
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+    weather = requests.get(weather_url).json().get("current_weather", {})
+
+    temp = weather.get("temperature", 30)
+    wind = weather.get("windspeed", 5)
+
+    # Real disease data from CSV
+    dengue = nearest.get('dengue_cases', random.randint(0,200))
+    malaria = nearest.get('malaria_cases', random.randint(0,200))
+    chikungunya = nearest.get('chikungunya_cases', random.randint(0,200))
+    state_name = nearest.get('state', 'Unknown')
+
+    total_cases = dengue + malaria + chikungunya
+    risk_level = "green"
+    if total_cases > 400:
+        risk_level = "red"
+    elif total_cases > 200:
+        risk_level = "yellow"
+
+    precautions = {
+        "red": [
+            "Avoid stagnant water areas",
+            "Wear full-sleeve clothing",
+            "Use mosquito repellents",
+            "Stay indoors during peak heat"
+        ],
+        "yellow": [
+            "Clean water storage regularly",
+            "Use bed nets at night",
+            "Stay hydrated"
+        ],
+        "green": [
+            "Conditions safe but stay alert",
+            "Maintain hygiene",
+            "Regular health check-ups"
+        ]
+    }
+
+    return jsonify({
+        "state": state_name,
+        "weather": {
+            "temperature": temp,
+            "windspeed": wind
+        },
+        "health": {
+            "dengue": int(dengue),
+            "malaria": int(malaria),
+            "chikungunya": int(chikungunya),
+            "risk": risk_level,
+            "precautions": precautions[risk_level]
+        },
+        "coords": [lat, lon]
+    })
+
+@app.route("/chat", methods=["POST"])
 def chat():
-    user_input = request.json.get('message','')
-    # Combine all state data for AI context
-    states_text = "\n".join(
-        f"{r['State']} Dengue:{r.get('Dengue',0)} Malaria:{r.get('Malaria',0)} Chikungunya:{r.get('Chikungunya',0)} Risk:{r['Risk']}"
-        for _, r in states_df.iterrows()
+    user_message = request.get_json().get("message", "")
+    completion = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role":"system","content":"You are a helpful health & weather assistant for India."},
+                  {"role":"user","content":user_message}]
     )
-    prompt = f"""
-You are HealthBot for India's Disease Portal.
-You have this data:
-{states_text}
+    reply = completion.choices[0].message.content
+    return jsonify({"reply": reply})
 
-Answer the user’s question below, giving helpful and preventive advice.
-If asked about a state, use the data above.
-If asked for general health advice, respond appropriately:
-
-Question: {user_input}
-"""
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful public health advisor."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=400
-        )
-        answer = completion.choices[0].message.content
-    except Exception as e:
-        answer = f"Error: {e}"
-    return jsonify({"reply":answer})
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)

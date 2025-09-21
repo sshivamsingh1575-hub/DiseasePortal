@@ -5,59 +5,186 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Disease & Weather Portal</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
-body {background:#f5f7fa;font-family:sans-serif;}
-.hero {background:#2193b0;color:white;padding:40px;text-align:center;margin-bottom:20px;}
+body {
+  background: linear-gradient(135deg,#f5f7fa,#c3cfe2);
+  font-family: 'Segoe UI', sans-serif;
+  color:#333;
+}
+.hero {
+  background: linear-gradient(135deg,#6dd5ed,#2193b0);
+  color: white;
+  padding: 40px 0;
+  text-align: center;
+  border-radius: 0 0 25px 25px;
+  margin-bottom: 20px;
+}
+.hero h1 {font-weight:700;}
+.hero p {font-size:1.2rem;}
+.card {
+  border-radius: 20px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+  transition: transform 0.2s;
+}
+.card:hover {transform:scale(1.02);}
+#map {
+  height: 400px;
+  width: 100%;
+  border-radius:25px;
+  margin-top:20px;
+}
+.precaution-card {
+  background:white;
+  border-radius:15px;
+  padding:15px;
+  text-align:center;
+  box-shadow:0 4px 12px rgba(0,0,0,0.1);
+  margin-bottom:15px;
+  animation: fadeIn 0.5s;
+}
+.chat-box {
+  background:white;
+  padding:20px;
+  border-radius:20px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.1);
+}
 </style>
 </head>
 <body>
 <div class="hero">
-  <h1>🌎 India Disease Portal</h1>
-  <p>State-wise risk map & AI advice</p>
+  <h1>🌎 Live Environment & Health Portal</h1>
+  <p>Detailed disease + weather data from your location</p>
 </div>
 <div class="container">
-  <div class="card p-3 mb-4">
-    <h3>Choose State</h3>
-    <input id="stateInput" class="form-control mb-2" placeholder="Enter state name e.g. Maharashtra">
-    <button class="btn btn-primary" onclick="fetchStateData()">Get State Info</button>
-    <div id="stateResult" class="mt-3"></div>
+  <!-- Location Selector -->
+  <div class="card p-4 mb-4">
+    <h3 class="mb-3">🎯 Choose Location</h3>
+    <div class="row g-2">
+      <div class="col-md-4">
+        <button class="btn btn-primary w-100" onclick="getLocation()">📍 Use My Location</button>
+      </div>
+      <div class="col-md-5">
+        <input type="text" id="manualLocation" class="form-control" placeholder="Enter city or place">
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-success w-100" onclick="manualLocation()">🔎 Search</button>
+      </div>
+    </div>
   </div>
-  <a href="/map" class="btn btn-success btn-lg mb-3">View Full Risk Map</a>
 
-  <div class="card p-3 mt-3">
+  <div id="info" class="mb-4 text-center">
+    <p>Select a location to see information here.</p>
+  </div>
+  <div id="map"></div>
+
+  <!-- AI Bot -->
+  <div class="chat-box mt-5">
     <h3>🤖 Ask Our AI Bot</h3>
     <textarea id="botInput" rows="3" class="form-control mb-3" placeholder="Ask anything about health, weather, or safety..."></textarea>
-    <button class="btn btn-primary" onclick="sendToBot()">Ask</button>
+    <button class="btn btn-primary btn-lg" onclick="sendToBot()">Ask</button>
     <div id="botReply" class="mt-3"></div>
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-async function fetchStateData(){
-  const state = document.getElementById('stateInput').value;
-  const res = await fetch('/state-data?state='+encodeURIComponent(state));
-  if(!res.ok){document.getElementById('stateResult').innerText='State not found';return;}
-  const data = await res.json();
-  document.getElementById('stateResult').innerHTML = `
-  <div class="alert alert-info">
-  <h4>${data.State}</h4>
-  Dengue: ${data.Dengue} <br>
-  Malaria: ${data.Malaria} <br>
-  Chikungunya: ${data.Chikungunya} <br>
-  Risk: <span style="color:${data.Risk}">${data.Risk}</span>
-  </div>`;
+let map = L.map('map').setView([20,80], 4);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+let marker;
+
+function colorByRisk(risk) {
+  if (risk==='red') return 'red';
+  if (risk==='yellow') return 'orange';
+  return 'green';
 }
 
-async function sendToBot(){
+function getLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function(position){
+      sendData(position.coords.latitude, position.coords.longitude);
+    });
+  } else {
+    alert('Geolocation not supported.');
+  }
+}
+
+async function manualLocation() {
+  const place = document.getElementById('manualLocation').value;
+  if (!place) return alert('Enter a place');
+  const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(place)}`);
+  const data = await res.json();
+  if (data.length > 0) {
+    sendData(data[0].lat, data[0].lon);
+  } else {
+    alert('Location not found');
+  }
+}
+
+async function sendData(lat, lon) {
+  document.getElementById('info').innerHTML = `<div class="spinner-border" role="status"></div> Loading data...`;
+  const response = await fetch('/data', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({lat: lat, lon: lon})
+  });
+  const result = await response.json();
+
+  const riskColor = colorByRisk(result.health.risk);
+  if (marker) {map.removeLayer(marker);}
+  marker = L.circle([lat, lon], {
+    color: riskColor,
+    fillColor: riskColor,
+    fillOpacity:0.4,
+    radius: 20000
+  }).addTo(map);
+  map.setView([lat, lon], 7);
+
+  let cardsHTML = `
+    <h3 class="mb-3">📍 State: ${result.state}</h3>
+    <div class="row">
+      <div class="col-md-4">
+        <div class="precaution-card">
+          <h4>🌡️ Weather</h4>
+          <p><b>Temperature:</b> ${result.weather.temperature}°C</p>
+          <p><b>Wind:</b> ${result.weather.windspeed} km/h</p>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="precaution-card">
+          <h4>🦟 Diseases</h4>
+          <p>Dengue: ${result.health.dengue}</p>
+          <p>Malaria: ${result.health.malaria}</p>
+          <p>Chikungunya: ${result.health.chikungunya}</p>
+          <p><b>Risk Level:</b> <span style="color:${riskColor}">${result.health.risk.toUpperCase()}</span></p>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="precaution-card">
+          <h4>🛡️ Precautions</h4>
+          <ul style="text-align:left">
+            ${result.health.precautions.map(p=>`<li>${p}</li>`).join("")}
+          </ul>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('info').innerHTML = cardsHTML;
+}
+
+async function sendToBot() {
   const userMessage = document.getElementById('botInput').value;
-  document.getElementById('botReply').innerText = 'Thinking...';
-  const response = await fetch('/chat',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({message:userMessage})
+  document.getElementById('botReply').innerHTML = `<div class="spinner-border" role="status"></div> Thinking...`;
+  const response = await fetch('/chat', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({message: userMessage})
   });
   const data = await response.json();
-  document.getElementById('botReply').innerText=data.reply;
+  document.getElementById('botReply').innerText = data.reply;
 }
 </script>
 </body>
